@@ -11,6 +11,16 @@ if not DATABASE_URL:
         "Set it in the environment or in a .env file before starting the app."
     )
 
+# basic sanity-check for a common mistake: only providing a hostname.
+# SQLAlchemy accepts dozens of schemes but they all include "://".
+if "://" not in DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL does not appear to include a scheme (e.g. 'postgresql://'\n"
+        "or 'sqlite://'). Make sure you provide the full connection string, not\n"
+        "just the host name.\n"
+        f"Current value: {DATABASE_URL!r}"
+    )
+
 # make sure the string is a valid SQLAlchemy URL, since an empty string or
 # malformed value will otherwise produce a confusing `ArgumentError` later
 # during engine creation.  We import lazily here so SQLAlchemy isn’t required
@@ -21,5 +31,6 @@ try:
     make_url(DATABASE_URL)
 except Exception as exc:  # pragma: no cover - very hard to trigger in tests
     raise RuntimeError(
-        f"DATABASE_URL is not a valid SQLAlchemy URL: {DATABASE_URL!r}: {exc}"
-    )
+        f"DATABASE_URL is not a valid SQLAlchemy URL: {DATABASE_URL!r}: {exc}\n"
+        "(ensure the scheme, credentials, host, port, and database are all\n"
+        "specified)")
