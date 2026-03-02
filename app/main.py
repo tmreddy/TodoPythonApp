@@ -16,14 +16,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("todo_api")
 
 # if running in AWS, add watchtower handler to send logs to CloudWatch
+# (watchtower is optional so the import is wrapped; this block may execute
+# at import time so we cannot rely on application state yet).
 try:
     from typing import TYPE_CHECKING
     if not TYPE_CHECKING:
         import watchtower
         # log group name can be environment configured or default
         log_group = os.getenv("CLOUDWATCH_LOG_GROUP", "todo-api-logs")
-        cw_handler = watchtower.CloudWatchLogHandler(log_group=log_group)
-        logger.addHandler(cw_handler)
+        try:
+            cw_handler = watchtower.CloudWatchLogHandler(log_group=log_group)
+            logger.addHandler(cw_handler)
+        except Exception as exc:  # catch boto3/botocore errors such as NoRegionError
+            # log a warning but continue – missing AWS credentials/region should
+            # not prevent the app from starting.
+            logger.warning("CloudWatch handler unavailable: %s", exc)
 except ImportError:
     # watchtower not installed or not required in development
     pass
