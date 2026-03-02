@@ -24,13 +24,29 @@ try:
         import watchtower
         # log group name can be environment configured or default
         log_group = os.getenv("CLOUDWATCH_LOG_GROUP", "todo-api-logs")
+        # attempt to pick up an explicit AWS region; boto3 will also try metadata
+        # but supplying one gives us a clearer error message up front.
+        region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
         try:
-            cw_handler = watchtower.CloudWatchLogHandler(log_group=log_group)
+            if region:
+                cw_handler = watchtower.CloudWatchLogHandler(
+                    log_group=log_group, region_name=region
+                )
+            else:
+                cw_handler = watchtower.CloudWatchLogHandler(log_group=log_group)
             logger.addHandler(cw_handler)
         except Exception as exc:  # catch boto3/botocore errors such as NoRegionError
-            # log a warning but continue – missing AWS credentials/region should
-            # not prevent the app from starting.
-            logger.warning("CloudWatch handler unavailable: %s", exc)
+            # provide a slightly friendlier explanation when region is missing
+            msg = str(exc)
+            if "region" in msg.lower():
+                logger.warning(
+                    "CloudWatch handler unavailable: %s\n"
+                    "(set AWS_REGION or AWS_DEFAULT_REGION, or grant the instance\n"
+                    "a region via metadata/instance role)",
+                    exc,
+                )
+            else:
+                logger.warning("CloudWatch handler unavailable: %s", exc)
 except ImportError:
     # watchtower not installed or not required in development
     pass

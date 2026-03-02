@@ -247,6 +247,24 @@ curl http://localhost:8000/.well-known/health
 curl http://localhost:8000/.well-known/swagger.json
 ```
 
+### **Troubleshooting**
+
+* **CloudWatch warnings about region** – if you see a log such as
+  `CloudWatch handler unavailable: You must specify a region.`, it simply means
+  boto3 could not determine which AWS region to use.  Set `AWS_REGION` or
+  `AWS_DEFAULT_REGION` in your `.env` (or let the instance metadata supply it)
+  and restart the service.  The app itself will still start and will continue
+  to log locally.
+
+* **RDS authentication/connection failures** – errors like
+  `password authentication failed for user` or `no pg_hba.conf entry for host`
+  indicate either wrong credentials in `DATABASE_URL` or that the RDS security
+  group isn’t allowing connections from your EC2 instance.  Update the security
+  group to allow inbound PostgreSQL (port 5432) from the EC2 instance’s IP or
+  security group, and verify the username/password/database name are correct.
+  RDS manages `pg_hba.conf` internally; you can’t edit it directly, so these
+  issues are always solved via credentials and security group rules.
+
 ---
 
 ### **Quick Reference: Useful Commands**

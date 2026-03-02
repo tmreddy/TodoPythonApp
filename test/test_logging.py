@@ -39,3 +39,23 @@ def test_watchtower_handler_fails(monkeypatch, caplog):
     caplog.set_level(logging.WARNING)
     reload_main()  # import should not raise
     assert "CloudWatch handler unavailable" in caplog.text
+
+
+def test_watchtower_respects_region(monkeypatch):
+    # the value of AWS_REGION should be passed through to the handler
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("AWS_REGION", "eu-west-1")
+    captured = {}
+
+    fake = types.SimpleNamespace()
+    def handler(log_group, region_name=None):
+        captured["group"] = log_group
+        captured["region"] = region_name
+        class Dummy:
+            pass
+        return Dummy()
+    fake.CloudWatchLogHandler = handler
+    monkeypatch.setitem(sys.modules, "watchtower", fake)
+
+    reload_main()  # should succeed
+    assert captured.get("region") == "eu-west-1"
