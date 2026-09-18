@@ -2,7 +2,7 @@ import logging
 import time
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app import crud
@@ -28,12 +28,17 @@ try:
         # but supplying one gives us a clearer error message up front.
         region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
         try:
+            # watchtower 3.x takes a preconfigured boto3 client rather than a
+            # region_name kwarg, so build the client here when we know the region.
             if region:
+                import boto3
+
                 cw_handler = watchtower.CloudWatchLogHandler(
-                    log_group=log_group, region_name=region
+                    log_group_name=log_group,
+                    boto3_client=boto3.client("logs", region_name=region),
                 )
             else:
-                cw_handler = watchtower.CloudWatchLogHandler(log_group=log_group)
+                cw_handler = watchtower.CloudWatchLogHandler(log_group_name=log_group)
             logger.addHandler(cw_handler)
         except Exception as exc:  # catch boto3/botocore errors such as NoRegionError
             # provide a slightly friendlier explanation when region is missing
@@ -90,7 +95,13 @@ def on_startup():
 
 @app.get("/.well-known/health")
 def health_check():
-    """Health check endpoint that verifies database connectivity."""
+    """Health check endpoint that verifies database connectivity.
+
+    Always returns HTTP 200 when the process is alive, reporting database state
+    in the body. This makes it a *liveness* signal: restarting the container
+    would not fix a database outage, so a failing database must not cause
+    Kubernetes to kill the pod. Use /.well-known/ready to gate traffic.
+    """
     try:
         # attempt a simple query to verify database is accessible
         with engine.connect() as connection:
@@ -101,6 +112,28 @@ def health_check():
             "status": "error",
             "database": "disconnected",
             "error": str(e)
+        }
+
+
+@app.get("/.well-known/ready")
+def readiness_check(response: Response):
+    """Readiness probe: HTTP 200 when able to serve, 503 when not.
+
+    Kubernetes and ALB/NLB target groups decide health from the *status code*
+    and never parse the body, so /.well-known/health -- which returns 200 even
+    with the database down -- cannot gate traffic. Without this endpoint a pod
+    that cannot reach the database would still be sent live requests.
+    """
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return {"status": "ready", "database": "connected"}
+    except Exception as e:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "not-ready",
+            "database": "disconnected",
+            "error": str(e),
         }
 
 

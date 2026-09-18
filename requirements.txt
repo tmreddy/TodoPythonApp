@@ -9,4 +9,6 @@ httpx>=0.25.0
 psycopg2-binary>=2.9.7
 # AWS logging
 boto3>=1.28.0
-watchtower>=1.7.3
+# watchtower 3.x is required: the CloudWatch handler is configured with a
+# boto3_client rather than the region_name kwarg used by 1.x/2.x.
+watchtower>=3.0.0

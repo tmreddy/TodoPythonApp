@@ -1,0 +1,41 @@
+# Kustomize entry point. `kubectl apply -k k8s/` applies everything below.
+#
+# Kustomize is used for one job here: rewriting the image reference at deploy
+# time without editing deployment.yaml in git. The CD workflow runs
+#   kustomize edit set image todo-api=<ecr-url>:<git-sha>
+# so the manifests in git stay environment-agnostic and every deployed image is
+# traceable to a commit.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: todo
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - pdb.yaml
+
+# Note: todo-api-secrets is deliberately NOT here. It holds the database
+# password and is created at deploy time from AWS Secrets Manager, so the
+# credential never exists in this repo. See k8s/README.md.
+
+images:
+  - name: todo-api
+    newName: todo-api
+    newTag: local
+
+# Uses `labels` with includeSelectors: false rather than the older
+# `commonLabels`. commonLabels injects its labels into spec.selector as well as
+# metadata.labels -- and a Deployment's selector is IMMUTABLE. Adding or renaming
+# a common label later then makes `kubectl apply` fail with
+# "field is immutable", and the only fix is deleting the Deployment (an outage).
+# Selectors stay pinned to app.kubernetes.io/name, which never changes.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: todo
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false

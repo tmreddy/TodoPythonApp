@@ -1,0 +1,40 @@
+# Public entry point.
+#
+# Why a Service of type LoadBalancer rather than an Ingress: this uses the AWS
+# cloud-controller-manager that EKS already runs, so it works on a bare cluster
+# with nothing extra installed. An ALB Ingress needs the AWS Load Balancer
+# Controller (its own IAM policy, IRSA role and Helm release) and its most
+# common failure mode is an Ingress stuck in <pending> with the reason buried in
+# controller logs. Get this working first; see k8s/README.md to upgrade to ALB
+# once you want path routing, TLS termination or WAF.
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-api
+  namespace: todo
+  labels:
+    app.kubernetes.io/name: todo-api
+  annotations:
+    # Network Load Balancer instead of the default Classic Load Balancer. CLB is
+    # legacy and AWS is retiring it; NLB is cheaper and faster.
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+
+    # Point the load balancer's health check at the READINESS endpoint. If this
+    # is left at the default TCP check, the target is "healthy" as soon as the
+    # port accepts connections -- so the load balancer would send requests to a
+    # pod that cannot reach the database.
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "HTTP"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/.well-known/ready"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "traffic-port"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "10"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: todo-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

@@ -1,0 +1,65 @@
+# Local container development: the app and PostgreSQL together.
+#
+#   docker compose up --build      start both, rebuilding the image
+#   docker compose logs -f api     follow application logs
+#   docker compose down            stop and remove containers
+#   docker compose down -v         also delete the database volume
+#
+# This runs the SAME image the pipeline builds and deploys, so "works on my
+# machine" and "works in the cluster" stop being different questions. The
+# credentials below are local-only throwaways; the deployed stack gets its
+# password from AWS Secrets Manager (see terraform/rds.tf).
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: todo-postgres
+    environment:
+      POSTGRES_USER: todo_user
+      POSTGRES_PASSWORD: todo_123
+      POSTGRES_DB: todo_db
+    ports:
+      # Exposed so you can also reach it with psql from the host.
+      - "5432:5432"
+    volumes:
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data. From postgres:18 the
+      # image stores data in a version-specific subdirectory so that
+      # `pg_upgrade --link` can work across a single mount point. Mounting the
+      # old /data path makes the container exit 1 on first start with
+      # "there appears to be PostgreSQL data in: /var/lib/postgresql/data
+      # (unused mount/volume)".
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      # pg_isready, not a port check: PostgreSQL accepts connections briefly
+      # before it can actually answer queries, so a port check lets the app
+      # start too early and fail its first connection.
+      test: ["CMD-SHELL", "pg_isready -U todo_user -d todo_db"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: todo-api:local
+    container_name: todo-api
+    depends_on:
+      postgres:
+        # Waits for the healthcheck above to pass, not merely for the container
+        # to exist.
+        condition: service_healthy
+    environment:
+      # Host is "postgres" -- the service name, resolved by Docker's internal
+      # DNS. "localhost" would refer to the api container itself.
+      DATABASE_URL: postgresql://todo_user:todo_123@postgres:5432/todo_db
+
+      # Leave AWS_DEFAULT_REGION unset locally. app/main.py skips the CloudWatch
+      # handler when there is no region, so the app logs to stdout only and does
+      # not need AWS credentials. See cloudwatch.md.
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

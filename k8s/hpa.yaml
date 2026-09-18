@@ -1,0 +1,41 @@
+# Horizontal Pod Autoscaler: add replicas under load, remove them when idle.
+#
+# Requires metrics-server, which EKS does not install by default -- Terraform
+# adds it as a managed addon (terraform/eks.tf). Without it this HPA reports
+# targets as "<unknown>/70%" and never scales.
+#
+# It also requires resource *requests* on the container (deployment.yaml sets
+# cpu: 100m), because target utilisation is a percentage OF THE REQUEST. With no
+# request there is nothing to take a percentage of.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: todo-api
+  namespace: todo
+  labels:
+    app.kubernetes.io/name: todo-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: todo-api
+
+  minReplicas: 2
+  maxReplicas: 6
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+  behavior:
+    # Scale up fast: being slow to add capacity is a user-visible outage.
+    scaleUp:
+      stabilizationWindowSeconds: 30
+    # Scale down slowly. A short window causes flapping -- pods are removed the
+    # moment load dips, then immediately re-added.
+    scaleDown:
+      stabilizationWindowSeconds: 300

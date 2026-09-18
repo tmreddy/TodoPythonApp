@@ -1,0 +1,21 @@
+# PodDisruptionBudget: protects availability during VOLUNTARY disruptions --
+# node upgrades, `kubectl drain`, cluster autoscaler consolidation.
+#
+# Without this, draining a node can evict every replica at once and take the
+# service down during routine maintenance. It does not protect against a node
+# crashing; nothing can, other than having replicas elsewhere.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: todo-api
+  namespace: todo
+  labels:
+    app.kubernetes.io/name: todo-api
+spec:
+  # With replicas: 2, this allows exactly one pod to be evicted at a time.
+  # Careful: setting minAvailable equal to the replica count blocks node drains
+  # entirely and makes cluster upgrades hang.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: todo-api

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: todo
+  labels:
+    app.kubernetes.io/name: todo-api
+    app.kubernetes.io/part-of: todo

@@ -42,15 +42,27 @@ def test_watchtower_handler_fails(monkeypatch, caplog):
 
 
 def test_watchtower_respects_region(monkeypatch):
-    # the value of AWS_REGION should be passed through to the handler
+    # AWS_REGION should reach the boto3 logs client handed to the handler.
+    # watchtower 3.x has no region_name kwarg, so the region is applied by
+    # constructing the client ourselves -- the fakes below mirror that API.
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("AWS_REGION", "eu-west-1")
     captured = {}
 
-    fake = types.SimpleNamespace()
-    def handler(log_group, region_name=None):
-        captured["group"] = log_group
+    sentinel_client = object()
+
+    fake_boto3 = types.SimpleNamespace()
+    def make_client(service_name, region_name=None):
+        captured["service"] = service_name
         captured["region"] = region_name
+        return sentinel_client
+    fake_boto3.client = make_client
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+    fake = types.SimpleNamespace()
+    def handler(log_group_name=None, boto3_client=None):
+        captured["group"] = log_group_name
+        captured["client"] = boto3_client
         class Dummy:
             pass
         return Dummy()
@@ -58,4 +70,6 @@ def test_watchtower_respects_region(monkeypatch):
     monkeypatch.setitem(sys.modules, "watchtower", fake)
 
     reload_main()  # should succeed
+    assert captured.get("service") == "logs"
     assert captured.get("region") == "eu-west-1"
+    assert captured.get("client") is sentinel_client

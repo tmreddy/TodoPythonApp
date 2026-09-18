@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-api
+  namespace: todo
+  labels:
+    app.kubernetes.io/name: todo-api
+spec:
+  replicas: 2
+
+  # RollingUpdate with surge 1 / unavailable 0 is what makes a deploy zero
+  # downtime: Kubernetes starts a new pod, waits for its readiness probe to
+  # pass, shifts traffic, and only then removes an old pod. Setting
+  # maxUnavailable above 0 would let capacity drop during a deploy.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: todo-api
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: todo-api
+    spec:
+      serviceAccountName: todo-api
+
+      # Pod-level hardening. The Dockerfile already creates an unprivileged
+      # user; this makes the cluster refuse to run the image at all if a future
+      # rebuild accidentally reverts to root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread replicas across availability zones. With both replicas on one
+      # node, a single node failure takes the whole service down -- which
+      # defeats the point of running two.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: todo-api
+
+      containers:
+        - name: api
+          # Replaced at deploy time by `kustomize edit set image` in cd.yml.
+          # Tagged by git SHA, never :latest -- see kustomization.yaml.
+          image: todo-api:local
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: todo-api-config
+
+          env:
+            # Created by cd.yml from AWS Secrets Manager; see k8s/README.md.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: todo-api-secrets
+                  key: DATABASE_URL
+
+          # --- probes ---------------------------------------------------------
+          # Three probes, three different jobs. Getting these wrong is the most
+          # common way a "working" deployment behaves badly under failure.
+
+          # startupProbe: gives the app time to boot before the other probes
+          # apply. Without it, a slow start looks like a liveness failure and
+          # Kubernetes restarts the pod forever. 30 x 2s = up to 60s to start.
+          startupProbe:
+            httpGet:
+              path: /.well-known/health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+
+          # livenessProbe: "is this process wedged?" Points at /health, which
+          # returns 200 whenever the process is alive even if the database is
+          # down -- restarting a pod does not fix a broken database, and doing
+          # so during an outage would restart every pod in a loop.
+          livenessProbe:
+            httpGet:
+              path: /.well-known/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # readinessProbe: "should this pod get traffic?" Points at /ready,
+          # which returns 503 when the database is unreachable, so a pod that
+          # cannot serve is pulled from the Service endpoints without being
+          # killed. It rejoins automatically when the database recovers.
+          readinessProbe:
+            httpGet:
+              path: /.well-known/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+
+          # --- resources ------------------------------------------------------
+          # requests are what the scheduler reserves; limits are the hard cap.
+          # Memory has a limit because exceeding it must fail fast (OOMKill)
+          # rather than starve the node. CPU deliberately has NO limit: a CPU
+          # limit throttles the container even when the node is idle, which
+          # shows up as mysterious latency spikes. The request alone guarantees
+          # a fair share under contention.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 384Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          # readOnlyRootFilesystem blocks all writes, so anything that needs a
+          # scratch directory gets an explicit writable volume.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      # Give in-flight requests time to finish before the container is killed.
+      terminationGracePeriodSeconds: 30

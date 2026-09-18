@@ -1,0 +1,48 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Every value here has a working default in variables.tf, so an empty
+# terraform.tfvars is valid. Override only what you need to change.
+
+region      = "us-east-1"
+project     = "todo"
+environment = "dev"
+
+# ---------------------------------------------------------------- Kubernetes --
+
+kubernetes_version = "1.31"
+
+# t3.small fits the system pods plus a few replicas. Move to t3.medium if pods
+# sit Pending with "Insufficient memory".
+node_instance_type = "t3.small"
+node_desired_size  = 2
+node_min_size      = 1
+node_max_size      = 3
+
+# Grant kubectl access to IAM principals other than whoever runs `apply`.
+# Needed only if GitHub Actions authenticates as a DIFFERENT IAM user than you
+# do locally -- the cluster creator gets admin automatically. Find the ARN with:
+#   aws sts get-caller-identity --query Arn --output text
+#
+# cluster_admin_role_arns = ["arn:aws:iam::123456789012:user/github-actions"]
+
+# Restrict who can reach the Kubernetes API. Defaults to anywhere, because
+# GitHub-hosted runners have no fixed egress addresses.
+# public_access_cidrs = ["203.0.113.4/32"]
+
+# ---------------------------------------------------------------------- RDS --
+
+db_instance_class = "db.t3.micro"
+db_engine_version = "18.6"
+db_name           = "todo_db"
+db_username       = "todouser"
+
+# Both cost money / block teardown. Leave off while learning.
+db_multi_az            = false
+db_deletion_protection = false
+
+# --------------------------------------------------------------------- logs --
+
+cloudwatch_log_group = "todo-api-logs"
+log_retention_days   = 7

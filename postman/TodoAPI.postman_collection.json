@@ -1,0 +1,353 @@
+{
+  "info": {
+    "name": "Todo API",
+    "description": "CRUD collection for the FastAPI Todo service.\n\nRun the app first (see README.md), then either send requests individually or use the Collection Runner / Newman to execute the whole folder in order.\n\nThe `Todos` folder is order-dependent: `Create todo` stores the new id in the `todoId` collection variable, and the later requests reuse it.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "todoId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Todos",
+      "item": [
+        {
+          "name": "Create todo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('returns the created todo', function () {",
+                  "    pm.expect(body).to.have.property('id');",
+                  "    pm.expect(body.title).to.eql('Buy milk');",
+                  "    pm.expect(body.description).to.eql('2% organic');",
+                  "    pm.expect(body.completed).to.eql(false);",
+                  "    pm.expect(body).to.have.property('created_at');",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('todoId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Buy milk\",\n  \"description\": \"2% organic\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/todos",
+              "host": ["{{baseUrl}}"],
+              "path": ["todos"]
+            },
+            "description": "Create a todo. Only `title` is required; `description` defaults to null and `completed` defaults to false."
+          },
+          "response": []
+        },
+        {
+          "name": "List all todos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('returns an array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/todos",
+              "host": ["{{baseUrl}}"],
+              "path": ["todos"]
+            },
+            "description": "List every todo."
+          },
+          "response": []
+        },
+        {
+          "name": "Get todo by id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('id matches the requested todo', function () {",
+                  "    pm.expect(String(pm.response.json().id))",
+                  "        .to.eql(String(pm.collectionVariables.get('todoId')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/todos/{{todoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["todos", "{{todoId}}"]
+            },
+            "description": "Fetch a single todo. Returns 404 if the id does not exist."
+          },
+          "response": []
+        },
+        {
+          "name": "Update todo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('completed flipped to true', function () {",
+                  "    pm.expect(pm.response.json().completed).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"completed\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/todos/{{todoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["todos", "{{todoId}}"]
+            },
+            "description": "Update a todo. Every field on the update schema is optional, so a partial body like `{\"completed\": true}` leaves title and description untouched. Returns 404 if the id does not exist."
+          },
+          "response": []
+        },
+        {
+          "name": "Get missing todo (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test('detail explains the miss', function () {",
+                  "    pm.expect(pm.response.json().detail).to.eql('Todo not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/todos/99999999",
+              "host": ["{{baseUrl}}"],
+              "path": ["todos", "99999999"]
+            },
+            "description": "Negative case: fetching an id that does not exist returns 404 with a `detail` message."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete todo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('confirms deletion', function () {",
+                  "    pm.expect(pm.response.json().message).to.eql('Deleted successfully');",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set('todoId', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/todos/{{todoId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["todos", "{{todoId}}"]
+            },
+            "description": "Delete a todo. Returns 404 if the id does not exist."
+          },
+          "response": []
+        }
+      ],
+      "description": "CRUD operations on todos, ordered so the Collection Runner can execute them as a lifecycle."
+    },
+    {
+      "name": "Service",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('database is connected', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql('ok');",
+                  "    pm.expect(body.database).to.eql('connected');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/health",
+              "host": ["{{baseUrl}}"],
+              "path": [".well-known", "health"]
+            },
+            "description": "Health check. Always returns 200; inspect the body, because a database outage reports `{\"status\": \"error\", \"database\": \"disconnected\"}` rather than a non-200 status."
+          },
+          "response": []
+        },
+        {
+          "name": "OpenAPI JSON",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('is an OpenAPI document', function () {",
+                  "    pm.expect(pm.response.json()).to.have.property('openapi');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/swagger.json",
+              "host": ["{{baseUrl}}"],
+              "path": [".well-known", "swagger.json"]
+            },
+            "description": "The generated OpenAPI document for the service."
+          },
+          "response": []
+        },
+        {
+          "name": "Swagger UI",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('serves HTML', function () {",
+                  "    pm.expect(pm.response.text()).to.include('swagger-ui');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/swagger",
+              "host": ["{{baseUrl}}"],
+              "path": [".well-known", "swagger"]
+            },
+            "description": "Human-readable Swagger UI, rendered from the checked-in swagger.json (falls back to the generated spec if that file is missing)."
+          },
+          "response": []
+        }
+      ],
+      "description": "Health and API-documentation endpoints."
+    }
+  ]
+}

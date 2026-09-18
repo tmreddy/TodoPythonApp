@@ -1,0 +1,18 @@
+# Non-secret configuration. The database URL is NOT here -- it contains a
+# password and lives in a Secret created at deploy time from AWS Secrets Manager.
+#
+# ConfigMap data is stored in plain text in etcd and printed by
+# `kubectl describe configmap`, so anything you would not paste into a chat
+# window belongs in a Secret instead.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: todo-api-config
+  namespace: todo
+  labels:
+    app.kubernetes.io/name: todo-api
+data:
+  # Enables the CloudWatch log handler in app/main.py. Without a region the
+  # handler is skipped and logs only go to stdout. See cloudwatch.md.
+  AWS_DEFAULT_REGION: us-east-1
+  CLOUDWATCH_LOG_GROUP: todo-api-logs
