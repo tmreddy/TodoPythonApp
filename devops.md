@@ -4,6 +4,7 @@ Assumes you know Python and Git, and nothing about containers, Kubernetes, CI/CD
 or Terraform. It walks the whole cycle for *this* repository — every file it
 names is real and you can open it.
 
+
 Read it in order. Sections 1-4 are concepts, 5 onwards is doing.
 
 ---
