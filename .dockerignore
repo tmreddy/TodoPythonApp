@@ -1,0 +1,63 @@
+# Everything here is excluded from the build context. Keeping this tight makes
+# builds faster and stops secrets from ever reaching an image layer.
+
+# Secrets -- the important part. deploy/deploy.env and *.pem must never be
+# baked into an image, where anyone who can pull it could read them.
+.env
+.env.*
+!.env.example
+deploy/deploy.env
+deploy/.deploy-state
+deploy/.deploy-secrets
+deploy/.known_hosts
+*.pem
+
+# Terraform state can contain the database password in plain text.
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/*.tfvars.example
+
+# Version control and CI config are not needed at runtime
+.git
+.gitignore
+.github/
+
+# Virtualenvs: built inside the image instead, and a host venv would carry
+# platform-specific binaries that break in Linux containers.
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# Tests and their artifacts do not ship to production
+test/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.db
+*.sqlite3
+
+# Docs, tooling, editor and OS noise
+*.md
+!README.md
+postman/
+k8s/
+deploy/
+migrations/
+alembic.ini
+docker-compose.yml
+Dockerfile
+.dockerignore
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.log

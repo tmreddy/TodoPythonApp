@@ -1,0 +1,72 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.sqlite3
+*.db
+todo_test_temp.db
+
+# Logs
+*.log
+
+# Deployment: local config, generated state, secrets, SSH keys
+deploy/deploy.env
+deploy/.deploy-state
+deploy/.deploy-secrets
+deploy/.known_hosts
+*.pem
+
+# Terraform
+# State files hold the database password in PLAIN TEXT -- never commit them.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+# Provider plugins and module cache: large, platform-specific, re-downloadable.
+**/.terraform/*
+# Real variable values, which may include account IDs and CIDRs.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+# Saved plans can contain sensitive values from state.
+tfplan
+*.tfplan
+plan.txt
+# Crash logs may contain state fragments.
+crash.log
+crash.*.log
+# The lock file IS committed on purpose: it pins provider versions so CI and
+# your laptop resolve identical plugins.
+!.terraform.lock.hcl
+
+# Kubernetes: rendered manifests may contain substituted account IDs
+k8s/*.rendered.yaml
+kubeconfig
+kubeconfig.*
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
