@@ -182,23 +182,36 @@ jobs:
           ACTION: ${{ inputs.action }}
           CONFIRM: ${{ inputs.confirm }}
         run: |
-          # Trim surrounding whitespace and compare case-insensitively. An
-          # accidental trailing space from a copy-paste, or "Apply", is still a
-          # deliberate confirmation -- the safety property is that you typed the
-          # word at all, so failing on those only causes a pointless re-run.
-          trim() { printf '%s' "$1" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'; }
+          # Keep only letters and digits, then lowercase. Both expected values
+          # ("apply", "destroy") are pure letters, so this is a safe
+          # normalisation and it tolerates every realistic paste artefact: a
+          # trailing space, "Apply", stray quotes, and -- the one that bites
+          # when copying out of rendered documentation -- a non-breaking space
+          # (U+00A0), which `tr -d '[:space:]'` does NOT remove because tr works
+          # on bytes and U+00A0 is multi-byte UTF-8.
+          #
+          # The safety property is unchanged: you still have to type the word.
+          # "apply" vs "destroy" still mismatches.
+          norm() { printf '%s' "$1" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]'; }
 
-          if [ "$(trim "$CONFIRM")" != "$(trim "$ACTION")" ]; then
+          if [ "$(norm "$CONFIRM")" != "$(norm "$ACTION")" ]; then
             echo "::error::Confirmation mismatch -- nothing was changed."
             echo
             echo "  action  = '${ACTION}'"
             echo "  confirm = '${CONFIRM}'"
+            printf '  confirm as bytes: '; printf '%s' "$CONFIRM" | od -c | head -2
             echo
             if [ -z "$CONFIRM" ]; then
-              echo "The confirm box was left EMPTY. It is a separate field below the"
-              echo "action dropdown, and it is not filled in for you."
+              echo "The confirm box was EMPTY. Two things cause that:"
+              echo
+              echo " 1. It is a separate text field BELOW the action dropdown and is"
+              echo "    not filled in for you."
+              echo " 2. You used 'Re-run jobs' on a previous run. Re-running replays"
+              echo "    the ORIGINAL inputs and gives you no chance to change them,"
+              echo "    so a run that failed here will keep failing here forever."
+              echo "    Start a fresh run: Actions -> terraform -> Run workflow."
             fi
-            echo "Re-run the workflow and type exactly this in the confirm box:"
+            echo "Type exactly this in the confirm box:"
             echo
             echo "    ${ACTION}"
             exit 1
