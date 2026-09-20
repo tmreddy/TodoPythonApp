@@ -4,7 +4,6 @@ Assumes you know Python and Git, and nothing about containers, Kubernetes, CI/CD
 or Terraform. It walks the whole cycle for *this* repository — every file it
 names is real and you can open it.
 
-
 Read it in order. Sections 1-4 are concepts, 5 onwards is doing.
 
 ---
@@ -146,6 +145,9 @@ push to any branch
           |     FAILED -> kubectl rollout undo, then fail the build
           +-- curl the public load balancer URL
 ```
+
+That is the summary. [pipeline-flow.md](pipeline-flow.md) traces all 35 steps
+individually — what each one proves, and what a failure at each one means.
 
 Three things about that shape are the actual lessons:
 

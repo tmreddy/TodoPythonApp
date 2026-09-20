@@ -1,0 +1,504 @@
+# The delivery pipeline: test -> build -> deploy.
+#
+# Runs on a push to ANY branch. Tests and a container smoke test run everywhere;
+# only main deploys, because all branches share one cluster and one database, so
+# deploying every branch would mean whoever pushed last wins.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+# See .github/workflows/README.md for the IAM permissions these need.
+
+name: pipeline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch. Without this, three quick pushes
+# start three deploys that race each other to the cluster.
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: todo-api
+  EKS_CLUSTER: todo-cluster
+  K8S_NAMESPACE: todo
+  K8S_DEPLOYMENT: todo-api
+  DB_SECRET_ID: todo/database-url
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------- tests ----
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Deliberately does NOT create a .env file. app/config.py calls
+      # load_dotenv() on import, so a .env on disk makes
+      # test_config.py::test_missing_database_url fail with "DID NOT RAISE" --
+      # the test unsets DATABASE_URL but load_dotenv reads it straight back off
+      # disk. Documented in README.md.
+      - name: Run tests
+        run: pytest -v --junitxml=test-results.xml
+
+      # Publishes results even when tests fail, so the failure is readable in
+      # the run summary instead of only in raw logs.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+          if-no-files-found: warn
+
+  # ------------------------------------------------------ container smoke ----
+  # Proves the image actually builds and serves traffic against a real
+  # PostgreSQL. A passing unit suite does not prove the container works: the
+  # tests run on SQLite in-process and never exercise the Dockerfile.
+  container:
+    name: container smoke test
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: todo-api:ci
+          # Layer cache in GitHub Actions, so the deploy job's rebuild is fast.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A user-defined network so the app container can resolve "postgres" by
+      # name. Containers on the default bridge network cannot.
+      - name: Start PostgreSQL
+        run: |
+          docker network create todo-ci
+          docker run -d --name postgres --network todo-ci \
+            -e POSTGRES_USER=todo_user \
+            -e POSTGRES_PASSWORD=todo_123 \
+            -e POSTGRES_DB=todo_db \
+            --health-cmd='pg_isready -U todo_user -d todo_db' \
+            --health-interval=2s --health-timeout=3s --health-retries=15 \
+            postgres:18
+
+          echo "Waiting for PostgreSQL..."
+          for i in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Health.Status}}' postgres)" = "healthy" ]; then
+              echo "PostgreSQL ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL did not become healthy"; docker logs postgres; exit 1
+
+      - name: Run the application container
+        run: |
+          docker run -d --name todo-api --network todo-ci -p 8000:8000 \
+            -e DATABASE_URL='postgresql://todo_user:todo_123@postgres:5432/todo_db' \
+            todo-api:ci
+
+      # Poll the readiness endpoint, which returns 503 until the database is
+      # actually reachable -- so a pass here means the app connected, not just
+      # that the port opened.
+      - name: Wait for readiness
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/.well-known/ready || true)
+            echo "attempt $i: /.well-known/ready -> ${code:-no-response}"
+            if [ "$code" = "200" ]; then echo "ready"; exit 0; fi
+            sleep 2
+          done
+          echo "Container never became ready."
+          echo "--- container logs ---"; docker logs todo-api
+          exit 1
+
+      - name: Exercise the API
+        run: |
+          set -euo pipefail
+
+          echo "== create =="
+          id=$(curl -sf -X POST http://localhost:8000/todos \
+                 -H 'Content-Type: application/json' \
+                 -d '{"title":"ci smoke","description":"pipeline.yml"}' \
+               | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          echo "created id=$id"
+
+          echo "== read =="
+          curl -sf "http://localhost:8000/todos/$id" >/dev/null
+
+          echo "== list =="
+          curl -sf http://localhost:8000/todos >/dev/null
+
+          echo "== update =="
+          curl -sf -X PUT "http://localhost:8000/todos/$id" \
+            -H 'Content-Type: application/json' -d '{"completed":true}' >/dev/null
+
+          echo "== 404 for a missing todo =="
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/todos/99999999)
+          [ "$code" = "404" ] || { echo "expected 404, got $code"; exit 1; }
+
+          echo "== delete =="
+          curl -sf -X DELETE "http://localhost:8000/todos/$id" >/dev/null
+
+          echo "All API checks passed."
+
+      # Catches a regression that unit tests cannot see: if the Dockerfile ever
+      # stops setting USER, the container silently runs as root.
+      - name: Assert the container does not run as root
+        run: |
+          user=$(docker exec todo-api id -un)
+          echo "container user: $user"
+          [ "$user" != "root" ] || { echo "container is running as root"; exit 1; }
+
+      - name: Container logs
+        if: always()
+        run: docker logs todo-api || true
+
+  # --------------------------------------------------------------- deploy ----
+  deploy:
+    name: deploy to EKS
+    runs-on: ubuntu-latest
+    needs: [test, container]
+
+    # The branch gate. Every branch gets tested; only main reaches the cluster.
+    # The event check stops a pull_request build targeting main from deploying.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    # Marks the run in the repo's Environments view, and gives you somewhere to
+    # add a required reviewer later if you want a manual approval gate.
+    environment:
+      name: production
+      url: ${{ steps.endpoint.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # When a secret is missing, GitHub substitutes an empty string rather than
+      # failing, so configure-aws-credentials receives blank inputs and reports
+      # "Could not load credentials from any providers" -- which reads like an AWS
+      # problem and is actually an unset GitHub secret. Check first and say so.
+      #
+      # Lengths are safe to print and are the useful signal: an access key ID is
+      # 20 characters and a secret access key is 40. Anything else means the value
+      # was pasted wrong (truncated, swapped, or with surrounding whitespace).
+      - name: Check the AWS secrets are set
+        env:
+          KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          missing=0
+          [ -n "$KEY_ID" ] || { echo "::error::Repository secret AWS_ACCESS_KEY_ID is not set (or is empty)."; missing=1; }
+          [ -n "$SECRET" ] || { echo "::error::Repository secret AWS_SECRET_ACCESS_KEY is not set (or is empty)."; missing=1; }
+
+          if [ "$missing" -ne 0 ]; then
+            cat <<'MSG'
+
+          Add them here:
+
+            Settings -> Secrets and variables -> Actions
+            -> the "Secrets" tab -> "New repository secret"
+
+          https://github.com/${{ github.repository }}/settings/secrets/actions
+
+          Names must match exactly (case-sensitive):
+
+            AWS_ACCESS_KEY_ID
+            AWS_SECRET_ACCESS_KEY
+
+          Common mistakes:
+            - Added under the "Variables" tab instead of "Secrets". Variables are
+              not secrets and ${{ secrets.X }} cannot see them.
+            - Added on the Dependabot or Codespaces tab. Those are separate stores
+              and Actions cannot read them.
+            - Added as Environment secrets on an environment this job does not
+              use. This job uses the "production" environment; the terraform plan
+              job uses none. Repository secrets work for both -- prefer those.
+            - Name typo, or lowercase.
+          MSG
+            exit 1
+          fi
+
+          echo "AWS_ACCESS_KEY_ID is set (${#KEY_ID} characters, expected 20)"
+          echo "AWS_SECRET_ACCESS_KEY is set (${#SECRET} characters, expected 40)"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Proves the credentials are not just present but valid. Without this, a
+      # wrong or expired key surfaces later as a confusing "not found" from
+      # whichever AWS call happens to run first.
+      - name: Verify the credentials work
+        run: aws sts get-caller-identity
+
+      # This pipeline deploys the APPLICATION. It never creates infrastructure --
+      # that is terraform.yml, run deliberately. So on a brand new account the
+      # cluster does not exist yet and this job would otherwise fail deep inside
+      # `aws eks update-kubeconfig` with an opaque error. Fail here instead, with
+      # the actual remedy.
+      - name: Preflight -- does the infrastructure exist?
+        run: |
+          missing=0
+
+          if ! aws eks describe-cluster --name "$EKS_CLUSTER" >/dev/null 2>&1; then
+            echo "::error::EKS cluster '$EKS_CLUSTER' not found in $AWS_REGION."
+            missing=1
+          fi
+
+          if ! aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::ECR repository '$ECR_REPOSITORY' not found in $AWS_REGION."
+            missing=1
+          fi
+
+          if ! aws secretsmanager describe-secret --secret-id "$DB_SECRET_ID" >/dev/null 2>&1; then
+            echo "::error::Secret '$DB_SECRET_ID' not found in $AWS_REGION."
+            missing=1
+          fi
+
+          if [ "$missing" -ne 0 ]; then
+            cat <<'MSG'
+
+          The infrastructure has not been provisioned yet.
+
+          Application deploys are intentionally separate from infrastructure
+          changes, so this pipeline never runs `terraform apply`.
+
+          Provision it once, then re-run this job:
+
+            Actions -> terraform -> Run workflow
+              action  = apply
+              confirm = apply
+
+          Or locally:
+            cd terraform && terraform init && terraform apply
+
+          Takes 15-20 minutes: the EKS control plane alone is ~10-15.
+          See terraform/README.md.
+          MSG
+            exit 1
+          fi
+
+          echo "Infrastructure present."
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Tag by commit SHA, never :latest. ":latest" makes it impossible to say
+      # which code is running, and breaks rollback because there is no earlier
+      # tag to go back to.
+      - name: Resolve image tag
+        id: image
+        run: |
+          registry='${{ steps.ecr.outputs.registry }}'
+          echo "uri=${registry}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "repo=${registry}/${ECR_REPOSITORY}" >> "$GITHUB_OUTPUT"
+
+      # The ECR repository is created with IMMUTABLE tags, so pushing a tag that
+      # already exists fails. That happens on any re-run of a deploy for the same
+      # commit, so check first and reuse the existing image.
+      - name: Check whether this commit is already built
+        id: exists
+        run: |
+          if aws ecr describe-images \
+               --repository-name "$ECR_REPOSITORY" \
+               --image-ids "imageTag=$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Image for $GITHUB_SHA already in ECR; skipping build."
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push image
+        if: steps.exists.outputs.found == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.uri }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER"
+          kubectl version --client
+          # Fails loudly with "Unauthorized" if this IAM identity has no EKS
+          # access entry -- see cluster_admin_role_arns in terraform/variables.tf.
+          kubectl get nodes
+
+      - name: Install kustomize
+        run: |
+          curl -sSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+          kustomize version
+
+      # The namespace has to exist before the Secret can be created in it.
+      - name: Ensure namespace exists
+        run: kubectl apply -f k8s/namespace.yaml
+
+      # The password goes Secrets Manager -> Kubernetes Secret, and never passes
+      # through GitHub. add-mask stops it appearing in logs even if a later
+      # command echoes it.
+      - name: Sync database credentials from Secrets Manager
+        run: |
+          set -euo pipefail
+
+          secret_json=$(aws secretsmanager get-secret-value \
+            --secret-id "$DB_SECRET_ID" --query SecretString --output text)
+
+          database_url=$(printf '%s' "$secret_json" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["DATABASE_URL"])')
+
+          echo "::add-mask::$database_url"
+
+          # create --dry-run | apply is the idempotent way to upsert a Secret;
+          # plain `kubectl create secret` fails once it already exists.
+          kubectl create secret generic todo-api-secrets \
+            --namespace "$K8S_NAMESPACE" \
+            --from-literal=DATABASE_URL="$database_url" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Render manifests
+        run: |
+          set -euo pipefail
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+
+          # Fill in the IRSA role ARN, which is account-specific and therefore a
+          # placeholder in git.
+          sed -i "s|ACCOUNT_ID|${account_id}|g" k8s/serviceaccount.yaml
+
+          # Keep the ConfigMap's region consistent with where we deployed.
+          sed -i "s|AWS_DEFAULT_REGION: .*|AWS_DEFAULT_REGION: ${AWS_REGION}|" k8s/configmap.yaml
+
+          cd k8s
+          kustomize edit set image todo-api=${{ steps.image.outputs.uri }}
+
+          echo "--- rendered manifests ---"
+          kustomize build .
+
+      - name: Apply manifests
+        run: kubectl apply -k k8s/
+
+      # The real gate. maxUnavailable: 0 means a rollout only completes when new
+      # pods pass their readiness probe, so a broken image fails here instead of
+      # silently replacing a working deployment.
+      - name: Wait for rollout
+        id: rollout
+        run: |
+          kubectl rollout status "deployment/$K8S_DEPLOYMENT" \
+            --namespace "$K8S_NAMESPACE" --timeout=5m
+
+      # Automatic rollback. Without this a failed deploy leaves the deployment
+      # wedged, with new pods crash-looping and old ones still serving.
+      - name: Roll back on failure
+        if: failure() && steps.rollout.conclusion == 'failure'
+        run: |
+          echo "Rollout failed. Diagnostics:"
+          kubectl get pods -n "$K8S_NAMESPACE" -o wide || true
+          kubectl describe deployment/"$K8S_DEPLOYMENT" -n "$K8S_NAMESPACE" || true
+          kubectl logs -n "$K8S_NAMESPACE" -l app.kubernetes.io/name=todo-api \
+            --tail=100 --all-containers || true
+
+          echo "Rolling back to the previous revision."
+          kubectl rollout undo "deployment/$K8S_DEPLOYMENT" -n "$K8S_NAMESPACE"
+          kubectl rollout status "deployment/$K8S_DEPLOYMENT" \
+            -n "$K8S_NAMESPACE" --timeout=5m
+          exit 1
+
+      - name: Resolve public endpoint
+        id: endpoint
+        run: |
+          set -euo pipefail
+
+          # The cloud controller provisions the NLB asynchronously, so the
+          # hostname is empty for the first minute or two of a first deploy.
+          for i in $(seq 1 40); do
+            host=$(kubectl get svc "$K8S_DEPLOYMENT" -n "$K8S_NAMESPACE" \
+                    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            if [ -n "$host" ]; then
+              echo "load balancer: $host"
+              echo "host=$host" >> "$GITHUB_OUTPUT"
+              echo "url=http://$host" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "attempt $i: load balancer not assigned yet"
+            sleep 15
+          done
+          echo "Load balancer hostname was never assigned."
+          kubectl describe svc "$K8S_DEPLOYMENT" -n "$K8S_NAMESPACE" || true
+          exit 1
+
+      # A green rollout only proves the pods are healthy inside the cluster. This
+      # proves the path the user takes -- DNS, load balancer, target group, pod --
+      # actually works end to end.
+      - name: Smoke test through the load balancer
+        run: |
+          set -uo pipefail
+          host='${{ steps.endpoint.outputs.host }}'
+
+          # NLB DNS propagation plus target registration takes a few minutes on
+          # a first deploy, so this window is deliberately generous.
+          for i in $(seq 1 40); do
+            code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' \
+                    "http://${host}/.well-known/health" || true)
+            echo "attempt $i: http://${host}/.well-known/health -> ${code:-no-response}"
+            if [ "$code" = "200" ]; then
+              echo
+              echo "Health response:"
+              curl -s -m 10 "http://${host}/.well-known/health"; echo
+              echo "Deployed: http://${host}/"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Endpoint never returned 200."
+          kubectl get pods,svc,endpoints -n "$K8S_NAMESPACE" -o wide || true
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deployment"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+            echo "| Image | \`${{ steps.image.outputs.uri }}\` |"
+            echo "| Cluster | \`${EKS_CLUSTER}\` |"
+            echo "| Endpoint | ${{ steps.endpoint.outputs.url }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

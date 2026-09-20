@@ -7,6 +7,7 @@ The steps below are for running the app locally. For everything else:
 | Guide | For |
 |---|---|
 | [devops.md](devops.md) | **Start here** if containers, Kubernetes or CI/CD are new — the whole cycle from zero |
+| [pipeline-flow.md](pipeline-flow.md) | Step-by-step trace of what runs when you push, and where it fails |
 | [terraform/README.md](terraform/README.md) | Provisioning and tearing down the AWS infrastructure |
 | [k8s/README.md](k8s/README.md) | The Kubernetes manifests, probes and rollouts |
 | [cloudwatch.md](cloudwatch.md) | Reading and searching the logs |
