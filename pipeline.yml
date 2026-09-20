@@ -297,7 +297,6 @@ jobs:
 
             Actions -> terraform -> Run workflow
               action  = apply
-              confirm = apply
 
           Or locally:
             cd terraform && terraform init && terraform apply

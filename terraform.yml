@@ -8,7 +8,9 @@
 # On a pull request touching terraform/: runs fmt, validate and plan, then posts
 # the plan as a PR comment for review.
 # On main: plan only -- never an automatic apply.
-# apply: manual, via "Run workflow", and it makes you type the word apply.
+# apply: manual, via "Run workflow".
+# destroy: manual too, and it makes you type the word destroy -- that one is
+# irreversible, so it is the one worth gating.
 
 name: terraform
 
@@ -26,8 +28,14 @@ on:
         default: plan
         type: choice
         options: [plan, apply, destroy]
+      # Only destroy needs this. apply is convergent -- running it twice does
+      # nothing the first run did not already do, and a mistake is recoverable by
+      # correcting the config and applying again. destroy is irreversible: it
+      # deletes the database with skip_final_snapshot = true. So the typed
+      # confirmation is required exactly where the damage is permanent, rather
+      # than on every run where it is mostly a source of failed runs.
       confirm:
-        description: 'Type "apply" or "destroy" to confirm a state-changing run'
+        description: 'Only for destroy: type "destroy" here to confirm. Leave empty for plan/apply.'
         required: false
         type: string
 
@@ -171,17 +179,55 @@ jobs:
       # because terraform/ does not exist in the workspace yet.
       - uses: actions/checkout@v4
 
-      # A typo in the confirm box should stop the run before it touches AWS, not
-      # after. Checking out the repository touches nothing, so this is still the
-      # first thing that can fail.
+      # Guards DESTROY only -- see the note on the `confirm` input above. This
+      # step is skipped entirely for apply, so a forgotten confirm box can no
+      # longer block provisioning.
+      #
+      # Values come in via env rather than being interpolated into the script,
+      # so a quote or backtick in the box cannot break (or inject into) the shell.
       - name: Verify confirmation
+        if: inputs.action == 'destroy'
+        env:
+          ACTION: ${{ inputs.action }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
-          if [ "${{ inputs.confirm }}" != "${{ inputs.action }}" ]; then
-            echo "::error::Confirmation mismatch."
-            echo "To ${{ inputs.action }}, type '${{ inputs.action }}' in the confirm box."
+          # Keep only letters and digits, then lowercase. Both expected values
+          # ("apply", "destroy") are pure letters, so this is a safe
+          # normalisation and it tolerates every realistic paste artefact: a
+          # trailing space, "Apply", stray quotes, and -- the one that bites
+          # when copying out of rendered documentation -- a non-breaking space
+          # (U+00A0), which `tr -d '[:space:]'` does NOT remove because tr works
+          # on bytes and U+00A0 is multi-byte UTF-8.
+          #
+          # The safety property is unchanged: you still have to type the word.
+          # "apply" vs "destroy" still mismatches.
+          norm() { printf '%s' "$1" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]'; }
+
+          if [ "$(norm "$CONFIRM")" != "$(norm "$ACTION")" ]; then
+            echo "::error::Confirmation mismatch -- nothing was changed."
+            echo
+            echo "  action  = '${ACTION}'"
+            echo "  confirm = '${CONFIRM}'"
+            printf '  confirm as bytes: '; printf '%s' "$CONFIRM" | od -c | head -2
+            echo
+            if [ -z "$CONFIRM" ]; then
+              echo "The confirm box was EMPTY. Two things cause that:"
+              echo
+              echo " 1. It is a separate text field BELOW the action dropdown and is"
+              echo "    not filled in for you."
+              echo " 2. You used 'Re-run jobs' on a previous run. Re-running replays"
+              echo "    the ORIGINAL inputs and gives you no chance to change them,"
+              echo "    so a run that failed here will keep failing here forever."
+              echo "    Start a fresh run: Actions -> terraform -> Run workflow."
+            fi
+            echo "This destroys the database and all its data, so it is confirmed"
+            echo "by hand on purpose. Type exactly this in the confirm box:"
+            echo
+            echo "    ${ACTION}"
             exit 1
           fi
-          echo "Confirmed: ${{ inputs.action }}"
+
+          echo "Confirmed: ${ACTION}"
 
       - uses: hashicorp/setup-terraform@v3
         with:

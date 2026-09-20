@@ -188,9 +188,14 @@ no undo. The industry compromise, and what this repo does: **plans are automatic
 applies are manual.**
 
 [terraform.yml](.github/workflows/terraform.yml) posts a plan on every pull
-request touching `terraform/**` so you can read what *would* change, and only
-applies when you go to **Actions → terraform → Run workflow** and type the word
-`apply` in the confirm box.
+request touching `terraform/**` so you can read what *would* change, and never
+applies by itself — you go to **Actions → terraform → Run workflow** and pick
+`apply` deliberately.
+
+`destroy` goes one step further and makes you type the word `destroy` in the
+confirm box. That asymmetry is on purpose: `apply` is convergent, so running it
+twice does nothing the first run did not, and a mistake is fixable by correcting
+the config and applying again. `destroy` deletes the database permanently.
 
 If you push to `main` before provisioning, the deploy job's preflight step fails
 in seconds with the remedy printed in the log, instead of failing four minutes
@@ -266,7 +271,8 @@ Two things worth knowing:
 
 ### Step 2 — provision the infrastructure (once, ~15-20 min)
 
-**Actions → terraform → Run workflow**, `action = apply`, `confirm = apply`.
+**Actions → terraform → Run workflow**, `action = apply`. Leave the confirm box
+empty — it is only required for `destroy`.
 
 Or locally:
 
