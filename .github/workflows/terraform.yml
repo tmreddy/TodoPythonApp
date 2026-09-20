@@ -142,17 +142,20 @@ jobs:
       name: infrastructure
 
     steps:
-      # A typo in the confirm box should stop the run before it touches AWS,
-      # not after.
+      # Checkout MUST come first. defaults.run.working-directory is terraform/,
+      # which does not exist until the repo is cloned, so any `run` step placed
+      # before checkout fails with "No such file or directory".
+      - uses: actions/checkout@v4
+
       - name: Verify confirmation
         run: |
           if [ "${{ inputs.confirm }}" != "${{ inputs.action }}" ]; then
-            echo "Confirmation mismatch."
+            echo "::error::Confirmation mismatch."
             echo "To ${{ inputs.action }}, type '${{ inputs.action }}' in the confirm box."
             exit 1
           fi
+          echo "Confirmed: ${{ inputs.action }}"
 
-      - uses: actions/checkout@v4
 
       - uses: hashicorp/setup-terraform@v3
         with:
